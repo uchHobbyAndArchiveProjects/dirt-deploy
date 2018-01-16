@@ -1,0 +1,132 @@
+---
+## file: myplaybook.yml
+
+## usage: ansible-playbook -i <inventory file> myplaybook.yml
+
+ - hosts: localhost
+   vars:
+     - webuser: webuser
+     - wordpress_web_domain: www.example.com
+     - wordpress_db_user: wordpress 
+     - wordpress_db_password: admin
+     - wordpress_admin_user: admin
+     - wordpress_admin_password: admin
+     - wordpress_admin_email: admin@example.com
+     - wordpress_tile_site: Hello_world
+     - mysql_root_password: admin
+#  roles:
+#    - roleA
+#    - roleB
+   tasks:
+     - name: install mariadb Server and Client. 
+       apt:
+         name: "{{ item }}"
+         state: present 
+       with_items:
+         - openssl
+         - git
+         - php
+         - php-fpm
+         - php-mysql
+         - php-mcrypt
+         - php-pspell
+         - php-curl
+         - nginx
+         - mariadb-server
+         - mariadb-client
+     - name: Set password for root password. 
+       mysql_user:
+         name: root
+         password: "{{ mysql_root_password }}"  
+     - name: Creaet WordPress Database
+       mysql_db:
+         name: wordpress
+         login_user: root
+         login_password: "{{ mysql_root_password }}"
+     - name: Create username and password for WordPress backend.
+       mysql_user:
+         name: "{{ wordpress_db_user }}"
+         password: "{{ wordpress_db_password }}"
+         priv: "wordpress.*:ALL"
+         login_user: root
+         login_password: "{{ mysql_root_password }}"
+     - name: Get WP-CLI tools.
+       get_url:
+         url: https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+         dest: /bin/wp
+         mode: 0775
+  
+     - name: Create user for Web Application
+       user: name="{{ webuser }}" state=present
+
+     - name: Init folder contain web applications
+       file: 
+         path: /home/{{ webuser }}/domains 
+         state: directory
+         owner: "{{ webuser }}"
+         group: "{{ webuser }}"
+
+     - name: Create web app folder by Domains name.
+       file:
+         path: /home/{{ webuser }}/domains/{{ wordpress_web_domain }}
+         state: directory
+       become: true
+       become_user: "{{ webuser }}"
+
+     - name: Install wordpress core application.
+       command: wp --allow-root core download
+       args:
+         chdir: /home/{{ webuser }}/domains/{{ wordpress_web_domain }}
+       become: true
+       become_user: "{{ webuser }}"
+
+     - name: Generate wp-config.php for our wordpress project. 
+       command: wp config create --dbname="wordpress" --dbuser="{{wordpress_db_user}}" --dbpass="{{wordpress_db_password}}"
+       args:
+         chdir: /home/{{ webuser }}/domains/{{ wordpress_web_domain }}
+       become: true
+       become_user: "{{ webuser }}"
+
+     - name: Install wordpress on db.
+       command: wp core install --url={{ wordpress_web_domain }}  --title={{ wordpress_tile_site }} --admin_user={{ wordpress_admin_user }} --admin_password={{ wordpress_admin_password }} --admin_email={{ wordpress_admin_email }}
+       args:
+         chdir: /home/{{ webuser }}/domains/{{ wordpress_web_domain }}
+       become: true
+       become_user: "{{ webuser }}"
+
+     - name: Modify Nginx core config match with our config. 
+       template:
+         src: ./nginx.conf.j2
+         dest: /etc/nginx/nginx.conf
+         backup: yes
+
+     - name: Setup WordPress VirtualHost for project.
+       template:
+         src: ./nginx.vhost.conf.j2
+         dest:  /etc/nginx/conf.d/{{ wordpress_web_domain }}.conf
+         backup: yes
+
+
+     - name: Create PHP-FPM pool per web app domain.
+       template:
+         src: ./fpm.pool.conf.j2
+         dest: /etc/php/7.0/fpm/pool.d/{{ wordpress_web_domain }}.conf  
+
+     - name: Create Log folder for VirtualHost project. 
+       file:
+         path: /var/log/{{ wordpress_web_domain }}
+         state: directory 
+
+     - name: Restart Service Nginx
+       service: 
+         name: "{{ item }}"
+         state: restarted
+       with_items:
+         - php7.0-fpm
+         - nginx
+#         - pdns-recursor
+     - name: Write configuration credential. 
+       template:
+         src: ./README.j2
+         dest: /root/README
+
